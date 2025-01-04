@@ -6,8 +6,11 @@ set -euo pipefail
 # ------------------------------
 DOCKER=$(which docker)
 
-CONTAINERS=("ollama" "kotaemon")
+CONTAINERS=("ollama" "kotaemon") # first container must be the ollama container
 NETWORK_NAME="rag_rag"
+
+CHAT_MODEL="llama3.1:8b"
+EMBEDDING_MODEL="nomic-embed-text"
 
 # Functions
 # ------------------------------
@@ -61,6 +64,13 @@ function handle_arguments() {
   done
 }
 
+# Get the IP address of a container
+# Usage: get_ip "container_name"
+function get_container_ip() {
+  local container_name=$1
+  docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name"
+}
+
 # Add containers names to /etc/hosts file
 # Usage: setup_host_resolution "(container list)"
 function setup_host_resolution() {
@@ -72,16 +82,15 @@ function setup_host_resolution() {
       continue
     fi
 
-    ip=$(get_ip "$container")
+    ip=$(get_container_ip "$container")
     log 1 "$ip $container" | sudo tee -a /etc/hosts
   done
 }
 
-# Get the IP address of a container
-# Usage: get_ip "container_name"
-function get_ip() {
-  local container_name=$1
-  docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name"
+# Download an ollama model on the ollama container
+# Usage: download_ollama_model "model_name"
+function download_ollama_model() {
+    $DOCKER compose exec -it "${CONTAINERS[0]}" ollama pull "$1"
 }
 
 # Main
@@ -91,15 +100,15 @@ function main() {
     $DOCKER compose up -d
 
     log 1 "Downloading ollama models..."
-    $DOCKER compose exec -it ollama ollama pull nomic-embed-text
-    $DOCKER compose exec -it ollama ollama pull llama3.1:8b
+    download_ollama_model $CHAT_MODEL
+    download_ollama_model $EMBEDDING_MODEL
 
     NETWORK_SUBNET=$(docker network inspect $NETWORK_NAME | jq '.[].IPAM.Config[].Subnet' | tr -d \")
     log 1 "$NETWORK_NAME network has subnet $NETWORK_SUBNET"
 
     # Print the IP addresses of the containers
     for container in "${CONTAINERS[@]}"; do
-        log 1 "Container $container has IP: $(get_ip "$container")"
+        log 1 "Container $container has IP: $(get_container_ip "$container")"
     done
 
     if [ $SETUP_HOST_RESOLUTION -eq 1 ]; then
